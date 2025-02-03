@@ -3,3 +3,7 @@ yt-dlp
 opencv-python
 numpy
 ultralytics
+gunicorn
+flask
+fastapi
+uvicorn
