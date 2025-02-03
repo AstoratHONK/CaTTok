@@ -2,6 +2,8 @@
 /logs — просмотр логов парсера.
 /download/{video_id} — скачивание видео.
 /start_parser
+
+ curl -X POST https://cattok-fl5w.onrender.com/start_parser
 curl "https://cattok-fl5w.onrender.com/list_dir?path=videos"
 curl "https://cattok-fl5w.onrender.com/logs"
 curl "https://cattok-fl5w.onrender.com/download/cat_video_1"
