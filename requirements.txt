@@ -1,0 +1,5 @@
+google-api-python-client
+yt-dlp
+opencv-python
+numpy
+ultralytics
