@@ -60,7 +60,8 @@ def search_cat_videos(max_results=50):
 
 def download_video(video_url, output_path):
     try:
-        command = ["yt-dlp", "-f", "best[ext=mp4]", "--postprocessor-args", "-t 30", "-o", output_path, video_url]
+        command = ["yt-dlp", "--cookies", "cookies.txt", "-f", "best[ext=mp4]", "-o", output_path, video_url]
+
         subprocess.run(command, check=True)
         return True
     except subprocess.CalledProcessError:
