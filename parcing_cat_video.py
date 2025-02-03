@@ -1,64 +1,36 @@
-import googleapiclient.discovery
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.responses import FileResponse, JSONResponse
 import os
-import time
+import uuid
 import subprocess
+import time
+import random
+import googleapiclient.discovery
 import cv2
 import numpy as np
 from ultralytics import YOLO
-import re
 
-# 🔹 Включить режим отладки (True = больше логов)
-DEBUG = True  
+app = FastAPI()
+VIDEO_DIR = "videos"
+PROCESSED_VIDEOS_FILE = "processed_videos.txt"
+API_KEY = os.environ.get("YOUTUBE_API_KEY")
 
-# 🔹 YouTube API-ключ
-API_KEY = "YOUTUBE_API_KEY"
-
-# 🔹 Настройки
-MAX_VIDEOS = 500  
-MAX_DOWNLOADS = 50  
-VIDEO_DIR = "cat_videos/"  
-PROCESSED_VIDEOS_FILE = "processed_videos.txt"  
-LOG_FILE = "logs.txt"  
-
-# 🔹 Ключевые слова для поиска
-queries = ["funny cat", "cute kitten", "crazy cat moments", "kitten exploring"]
-
-# 🔹 Фильтр AI-генерированных видео и анимаций
-ban_words = ["compilation", "mix", "AI", "GAN", "animation", "dance", "CGI", "cartoon", "plasticine", "synthesized", "3d model"]
-
-# 🔹 Инициализация YouTube API
 youtube = googleapiclient.discovery.build("youtube", "v3", developerKey=API_KEY)
+model = YOLO("yolov8s.pt")  # Загружаем модель YOLO для обнаружения котов
 
-# 🔹 Загружаем YOLOv8
-model = YOLO("yolov8s.pt")
+if not os.path.exists(VIDEO_DIR):
+    os.makedirs(VIDEO_DIR)
 
-# 🔹 Функция логирования
-def log(msg):
-    if DEBUG:
-        print(msg)
+# Список случайных запросов о котах
+cat_queries = [
+    "funny cat", "кот приколы", "gato lindo", "ねこ おもしろい", "котенок играется",
+    "cute kitten", "crazy cat", "кот мурчит", "chat drole", "katze lustig"
+]
 
-def log_rejection(video_url, reason):
-    with open(LOG_FILE, "a") as f:
-        f.write(f"{video_url} - ОТКЛОНЕНО: {reason}\n")
+# Функция поиска видео
 
-# 🔹 Получение длительности видео
-def get_video_duration(video_id):
-    request = youtube.videos().list(part="contentDetails", id=video_id)
-    response = request.execute()
-
-    if "items" in response and len(response["items"]) > 0:
-        duration_str = response["items"][0]["contentDetails"]["duration"]
-        match = re.match(r'PT(?:(\d+)M)?(?:(\d+)S)?', duration_str)
-
-        if match:
-            minutes = int(match.group(1)) if match.group(1) else 0
-            seconds = int(match.group(2)) if match.group(2) else 0
-            return minutes * 60 + seconds  # Конвертируем в секунды
-
-    return None  
-
-# 🔹 Фильтрация по заголовку и длительности
-def search_cat_videos(query, max_results=50):
+def search_cat_videos(max_results=50):
+    query = random.choice(cat_queries)  # Выбираем случайный запрос
     videos = []
     next_page_token = None
 
@@ -74,40 +46,28 @@ def search_cat_videos(query, max_results=50):
         response = request.execute()
 
         for item in response.get("items", []):
-            video_title = item["snippet"]["title"].lower()
             video_id = item["id"]["videoId"]
             video_link = f"https://www.youtube.com/watch?v={video_id}"
-
-            # Проверка длительности
-            duration = get_video_duration(video_id)
-            if duration is None or duration > 30:
-                log(f"⏭ Пропускаем {video_link} (длиннее 30 секунд, {duration} сек)")
-                continue  
-
-            # Фильтр AI-контента по названию
-            if any(word in video_title for word in ban_words):
-                log(f"⏭ Пропускаем {video_link} (AI-контент)")
-                continue
-
             videos.append(video_link)
-        
+
         next_page_token = response.get("nextPageToken")
         if not next_page_token:
-            break  
+            break
 
     return videos[:max_results]
 
-# 🔹 Функция скачивания видео
+# Функция загрузки видео (первые 30 секунд)
+
 def download_video(video_url, output_path):
     try:
-        command = ["yt-dlp", "-f", "best[ext=mp4]", "-o", output_path, video_url]
+        command = ["yt-dlp", "-f", "best[ext=mp4]", "--postprocessor-args", "-t 30", "-o", output_path, video_url]
         subprocess.run(command, check=True)
         return True
     except subprocess.CalledProcessError:
-        log(f"❌ Ошибка загрузки {video_url}")
         return False
 
-# 🔹 Функция обработки видео
+# Функция извлечения кадров из видео
+
 def extract_frames(video_path, frame_rate=10):
     cap = cv2.VideoCapture(video_path)
     frames = []
@@ -122,66 +82,72 @@ def extract_frames(video_path, frame_rate=10):
     cap.release()
     return frames
 
-# 🔹 Определение котов
+# Определение котов на кадрах
+
 def detect_cat(frame):
     results = model(frame, imgsz=640)
     for obj in results[0].boxes:
-        if int(obj.cls[0]) == 15:  # Кот
+        if int(obj.cls[0]) == 15:  # Класс "кот" в YOLO
             return True
     return False
 
-# 🔹 Проверка на ИИ-контент по текстуре
-def detect_texture(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    laplacian = cv2.Laplacian(gray, cv2.CV_64F).var()
-    return laplacian > 120  # Если <120 — это скорее всего ИИ-кот
+# Проверка видео на наличие котов
 
-# 🔹 Проверка видео
-def check_video_for_cats(video_url, save_path):
-    if not download_video(video_url, save_path):
-        log_rejection(video_url, "Ошибка загрузки")
-        return False
-
-    frames = extract_frames(save_path)
+def check_video_for_cats(video_path):
+    frames = extract_frames(video_path)
     if len(frames) == 0:
-        log_rejection(video_url, "Видео не содержит кадров")
-        os.remove(save_path)
+        os.remove(video_path)
         return False
 
     cat_count = sum(detect_cat(frame) for frame in frames)
     cat_probability = cat_count / len(frames)
 
-    texture_good = sum(detect_texture(frame) for frame in frames) / len(frames) > 0.5
-
     if cat_probability < 0.5:
-        log_rejection(video_url, "Котов в кадре < 50%")
-        os.remove(save_path)
+        os.remove(video_path)
         return False
 
-    if not texture_good:
-        log_rejection(video_url, "Изображение слишком гладкое (ИИ)")
-        os.remove(save_path)
-        return False
-
-    print(f"✅ Видео сохранено: {save_path}")
-    with open(PROCESSED_VIDEOS_FILE, "a") as f:
-        f.write(video_url + "\n")
     return True
 
-# 🔹 Основной процесс
-downloaded_videos = 0
-for query in queries:
-    videos = search_cat_videos(query)
-    log(f"🔍 Найдено {len(videos)} видео по запросу '{query}'")
+# Фоновая задача парсера
 
-    for video in videos:
-        if downloaded_videos >= MAX_DOWNLOADS:
-            break
+def run_parser():
+    downloaded_videos = 0
+    while downloaded_videos < 100:
+        videos = search_cat_videos()
+        for video in videos:
+            if downloaded_videos >= 100:
+                break
+            video_filename = os.path.join(VIDEO_DIR, f"cat_video_{downloaded_videos + 1}.mp4")
+            if download_video(video, video_filename) and check_video_for_cats(video_filename):
+                downloaded_videos += 1
+    time.sleep(43200)  # Ждём 12 часов
+    for file in os.listdir(VIDEO_DIR):
+        os.remove(os.path.join(VIDEO_DIR, file))
+    run_parser()  # Перезапускаем
 
-        video_filename = f"{VIDEO_DIR}cat_video_{downloaded_videos + 1}.mp4"
-        log(f"🔄 Проверка: {video}")
+@app.get("/")
+def read_root():
+    return {"message": "Сервер работает!"}
 
-        if check_video_for_cats(video, video_filename):
-            downloaded_videos += 1
+@app.post("/start_parser")
+def start_parser(background_tasks: BackgroundTasks):
+    background_tasks.add_task(run_parser)
+    return {"status": "Парсер запущен!"}
 
-print(f"🎉 Готово! Сохранено {downloaded_videos} видео с котами.")
+@app.get("/videos")
+def list_videos():
+    videos = [
+        {"id": file.split(".")[0], "url": f"/video/{file.split(".")[0]}"}
+        for file in os.listdir(VIDEO_DIR) if file.endswith(".mp4")
+    ]
+    return JSONResponse(content={"videos": videos})
+
+@app.get("/video/{video_id}")
+def get_video(video_id: str):
+    file_path = os.path.join(VIDEO_DIR, f"{video_id}.mp4")
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="video/mp4")
+    return JSONResponse(content={"error": "Видео не найдено"}, status_code=404)
+
+# Автоматический запуск парсера при старте сервера
+run_parser()

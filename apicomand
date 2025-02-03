@@ -1,0 +1,7 @@
+/list_dir?path=videos — просмотр файлов в указанной директории.
+/logs — просмотр логов парсера.
+/download/{video_id} — скачивание видео.
+
+curl "https://cattok-fl5w.onrender.com/list_dir?path=videos"
+curl "https://cattok-fl5w.onrender.com/logs"
+curl "https://cattok-fl5w.onrender.com/download/cat_video_1"
